@@ -1,0 +1,18 @@
+# 忽略敏感配置文件（推荐通过 .env 或环境变量注入）
+config.json
+.env
+
+# 忽略本地 Git 与缓存
+.git
+.github
+__pycache__
+*.py[cod]
+*$py.class
+*.log
+.DS_Store
+
+# 忽略开发环境
+venv
+.venv
+.vscode
+.idea

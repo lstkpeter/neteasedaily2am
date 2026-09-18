@@ -1,0 +1,16 @@
+{
+  "netease": {
+    "music_u": "在此粘贴网易云音乐网页端 Cookie 中的 MUSIC_U 值"
+  },
+  "apple_music": {
+    "developer_token": "在此粘贴从 music.apple.com 控制台获取的 developer_token (以 eyJh 开头)",
+    "music_user_token": "在此粘贴从 music.apple.com 获取的 media-user-token",
+    "storefront": "cn"
+  },
+  "playlist": {
+    "mode": "archive",
+    "overwrite_name": "网易云每日推荐",
+    "archive_prefix": "网易云日推 - ",
+    "description": "由自动化任务每日自动同步网易云音乐每日推荐"
+  }
+}

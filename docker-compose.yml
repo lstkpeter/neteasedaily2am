@@ -1,0 +1,20 @@
+services:
+  ncm2am:
+    build: .
+    container_name: ncm2am-sync
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Shanghai
+      - RUN_ON_STARTUP=true
+      # 优先从同级目录下的 .env 读取，或在此直接填入
+      - NCM_MUSIC_U=${NCM_MUSIC_U}
+      - AM_DEVELOPER_TOKEN=${AM_DEVELOPER_TOKEN}
+      - AM_MUSIC_USER_TOKEN=${AM_MUSIC_USER_TOKEN}
+      - AM_STOREFRONT=${AM_STOREFRONT:-cn}
+      - SYNC_MODE=${SYNC_MODE:-archive}
+      - PLAYLIST_OVERWRITE_NAME=${PLAYLIST_OVERWRITE_NAME:-网易云每日推荐}
+      - PLAYLIST_ARCHIVE_PREFIX=${PLAYLIST_ARCHIVE_PREFIX:-网易云日推 - }
+      - CRON_EXPR=30 6 * * *
+    # 如果习惯使用 config.json 文件配置，可取消下行注释进行挂载：
+    # volumes:
+    #   - ./config.json:/app/config.json:ro

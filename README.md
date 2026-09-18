@@ -1,4 +1,4 @@
-# NetEase2AM
+# NetEaseDaily2AM (neteasedaily2am)
 
 将网易云音乐“每日推荐”自动同步至 Apple Music 的轻量自动化工具。
 
@@ -103,7 +103,7 @@ crontab -e
 ```
 添加定时执行命令（如每天 06:30 执行）：
 ```cron
-30 6 * * * cd /path/to/netease2am && /usr/bin/python3 main.py sync >> /var/log/netease2am.log 2>&1
+30 6 * * * cd /path/to/neteasedaily2am && /usr/bin/python3 main.py sync >> /var/log/neteasedaily2am.log 2>&1
 ```
 
 ## 配置项参考

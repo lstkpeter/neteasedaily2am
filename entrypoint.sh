@@ -5,7 +5,7 @@ if [ "$1" = "sync" ] || [ "$1" = "test-netease" ] || [ "$1" = "test-am" ]; then
     exec python3 main.py "$@"
 fi
 
-echo "=== 启动 NetEase to Apple Music 定时守护进程 ==="
+echo "=== 启动 NetEaseDaily2AM 定时守护进程 ==="
 echo "设定执行时间: 每天早上 06:30 (Asia/Shanghai)"
 
 # 写入当前环境变量供 cron 使用

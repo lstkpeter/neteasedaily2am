@@ -1,7 +1,7 @@
 services:
-  ncm2am:
+  neteasedaily2am:
     build: .
-    container_name: ncm2am-sync
+    container_name: neteasedaily2am-sync
     restart: unless-stopped
     environment:
       - TZ=Asia/Shanghai

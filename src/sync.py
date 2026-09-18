@@ -9,17 +9,19 @@ from .config import AppConfig
 from .netease import NetEaseClient
 from .apple_music import AppleMusicClient
 from .matcher import SongMatcher
+from .logger import setup_logger
 
 console = Console()
 
 class SyncManager:
     """
     每日推荐同步管理器
-    协调网易云抓取、歌曲匹配与 Apple Music 歌单写入
+    协调网易云抓取、歌曲匹配与 Apple Music 歌单写入，支持终端高亮渲染与持久化文件日志
     """
 
     def __init__(self, config: AppConfig):
         self.config = config
+        self.logger = setup_logger()
         self.ncm = NetEaseClient(music_u=config.netease.music_u)
         self.am = AppleMusicClient(
             developer_token=config.apple_music.developer_token,
@@ -30,6 +32,7 @@ class SyncManager:
 
     def run(self) -> bool:
         today_str = datetime.date.today().strftime("%Y-%m-%d")
+        self.logger.info(f"=== 开始网易云每日推荐 -> Apple Music 同步任务 ({today_str}) ===")
         console.print(f"\n[bold cyan]=== 开始网易云每日推荐 -> Apple Music 同步任务 ({today_str}) ===[/bold cyan]\n")
 
         # 1. 获取网易云每日推荐
@@ -37,13 +40,16 @@ class SyncManager:
         try:
             ncm_songs = self.ncm.get_daily_recommend_songs()
         except Exception as e:
+            self.logger.error(f"获取网易云每日推荐失败: {e}", exc_info=True)
             console.print(f"[bold red]❌ 获取网易云每日推荐失败: {e}[/bold red]")
             return False
 
         if not ncm_songs:
+            self.logger.error("未能获取到任何推荐歌曲，请检查网易云登录态。")
             console.print("[red]❌ 未能获取到任何推荐歌曲，请检查网易云登录态。[/red]")
             return False
 
+        self.logger.info(f"成功获取网易云每日推荐 {len(ncm_songs)} 首歌曲")
         console.print(f"[green]✓ 成功获取网易云每日推荐 {len(ncm_songs)} 首歌曲[/green]\n")
 
         # 2. 匹配 Apple Music 曲库
@@ -70,9 +76,15 @@ class SyncManager:
                     if match_item:
                         matched_results.append((song, match_item))
                         am_catalog_song_ids.append(str(match_item["id"]))
+                        self.logger.info(
+                            f"[已匹配] {display_name} -> {match_item['title']} - {match_item['artist']} "
+                            f"(得分: {match_item.get('match_score')}, ID: {match_item['id']})"
+                        )
                     else:
                         unmatched_songs.append(song)
+                        self.logger.warning(f"[未匹配] {display_name} (Apple Music 曲库无版权或未搜到)")
                 except Exception as e:
+                    self.logger.error(f"搜索出错: {display_name} ({e})")
                     console.print(f"[dim red]搜索出错: {display_name} ({e})[/dim red]")
                     unmatched_songs.append(song)
 
@@ -83,6 +95,7 @@ class SyncManager:
         self._print_summary_table(matched_results, unmatched_songs)
 
         if not am_catalog_song_ids:
+            self.logger.error("匹配成功歌曲数为 0，终止歌单写入。")
             console.print("[bold red]❌ 匹配成功歌曲数为 0，终止歌单写入。[/bold red]")
             return False
 
@@ -99,6 +112,7 @@ class SyncManager:
                     description=description,
                     catalog_song_ids=am_catalog_song_ids,
                 )
+                self.logger.info(f"成功创建每日归档歌单: {playlist_name} (ID: {pid}, 包含歌曲: {len(am_catalog_song_ids)} 首)")
                 console.print(f"[bold green]🎉 每日归档歌单创建成功！(ID: {pid})[/bold green]")
 
             elif mode == "overwrite":
@@ -113,6 +127,7 @@ class SyncManager:
                         description=description,
                         catalog_song_ids=am_catalog_song_ids,
                     )
+                    self.logger.info(f"固定歌单不存在，已新建并导入 {len(am_catalog_song_ids)} 首歌曲: {playlist_name} (ID: {pid})")
                     console.print(f"[bold green]🎉 固定歌单创建成功并导入歌曲！(ID: {pid})[/bold green]")
                 else:
                     pid = existing["id"]
@@ -122,14 +137,18 @@ class SyncManager:
 
                     if to_add:
                         self.am.add_tracks_to_playlist(pid, to_add)
+                        self.logger.info(f"成功追加 {len(to_add)} 首新歌曲到「{playlist_name}」(ID: {pid}, 跳过已存在: {len(am_catalog_song_ids) - len(to_add)} 首)")
                         console.print(f"[bold green]🎉 成功追加 {len(to_add)} 首新歌曲到「{playlist_name}」！(跳过 {len(am_catalog_song_ids) - len(to_add)} 首已存在)[/bold green]")
                     else:
+                        self.logger.info(f"歌单「{playlist_name}」已包含今天所有推荐歌曲，无需重复添加。")
                         console.print(f"[bold green]✓ 歌单「{playlist_name}」已包含今天的所有推荐歌曲，无需重复添加。[/bold green]")
 
+            self.logger.info("全部同步流程执行完毕")
             console.print("\n[bold green]✅ 全部同步流程执行完毕！打开手机或电脑 Apple Music 即可收听。[/bold green]\n")
             return True
 
         except Exception as e:
+            self.logger.error(f"写入 Apple Music 歌单失败: {e}", exc_info=True)
             console.print(f"[bold red]❌ 写入 Apple Music 歌单失败: {e}[/bold red]")
             return False
 
@@ -140,6 +159,7 @@ class SyncManager:
     ):
         total = len(matched) + len(unmatched)
         rate = (len(matched) / total * 100) if total else 0.0
+        self.logger.info(f"同步匹配统计: 共 {total} 首，已匹配 {len(matched)} 首，未匹配 {len(unmatched)} 首 (匹配率: {rate:.1f}%)")
 
         table = Table(title=f"同步匹配统计 (匹配率: {rate:.1f}%)")
         table.add_column("状态", style="bold", justify="center", width=8)

@@ -11,9 +11,9 @@ echo "设定执行时间: 每天早上 06:30 (Asia/Shanghai)"
 # 写入当前环境变量供 cron 使用
 printenv | grep -E '^(NCM_|AM_|SYNC_|PLAYLIST_|PATH=)' > /etc/environment
 
-# 配置 cron 任务 (每天 06:30 自动执行)
+# 配置 cron 任务 (每天 06:30 自动执行，输出实时打入容器终端并保存到 /app/logs)
 CRON_SCHEDULE="${CRON_EXPR:-30 6 * * *}"
-echo "$CRON_SCHEDULE cd /app && python3 main.py sync >> /var/log/sync.log 2>&1" > /etc/cron.d/sync-cron
+echo "$CRON_SCHEDULE cd /app && python3 main.py sync > /proc/1/fd/1 2>&1" > /etc/cron.d/sync-cron
 chmod 0644 /etc/cron.d/sync-cron
 crontab /etc/cron.d/sync-cron
 

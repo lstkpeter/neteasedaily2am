@@ -47,18 +47,32 @@ class AppleMusicClient:
             **browser_headers,
         })
         self.session = self.user_session
+        self._last_request_time = 0.0
+        self._min_interval = 0.25  # 最低请求间隔 250ms，防止突发并发触发 429
+
+    def _rate_limit(self):
+        """保证两次请求之间具备安全的时间间隔"""
+        now = time.time()
+        elapsed = now - self._last_request_time
+        if elapsed < self._min_interval:
+            time.sleep(self._min_interval - elapsed)
+        self._last_request_time = time.time()
 
     def search_catalog_songs(self, term: str, limit: int = 5) -> List[Dict[str, Any]]:
         """
         在 Apple Music 公共曲库中搜索歌曲
-        使用 catalog_session 并具备 429 退避重试能力
+        优先使用携带用户订阅凭证的 user_session（享受订阅者配额，杜绝匿名 IP 429 限流）
         """
         encoded_term = urllib.parse.quote(term)
         url = f"{self.BASE_URL}/catalog/{self.storefront}/search?term={encoded_term}&types=songs&limit={limit}"
         
         for attempt in range(3):
+            self._rate_limit()
             try:
-                resp = self.catalog_session.get(url, timeout=10)
+                resp = self.user_session.get(url, timeout=10)
+                if resp.status_code == 429:
+                    # 若用户 session 限流，尝试使用纯公共 session 重试
+                    resp = self.catalog_session.get(url, timeout=10)
             except Exception:
                 time.sleep(1.0)
                 continue
@@ -79,7 +93,11 @@ class AppleMusicClient:
                     })
                 return results
             elif resp.status_code == 429:
-                wait_time = 2.0 * (attempt + 1)
+                retry_header = resp.headers.get("Retry-After")
+                if retry_header and retry_header.isdigit():
+                    wait_time = float(retry_header) + 1.0
+                else:
+                    wait_time = 2.5 * (attempt + 1)
                 try:
                     from .logger import setup_logger
                     setup_logger().warning(f"Apple Music 检索 '{term}' 触发 429 频率限制，等待 {wait_time:.1f}s 后重试 (第 {attempt+1}/3 次)...")

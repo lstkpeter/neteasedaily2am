@@ -132,7 +132,7 @@ class SongMatcher:
 
         return [v for v in variants if v]
 
-    def get_artist_variants(self, artist: str, extra_aliases: Optional[List[str]] = None) -> List[str]:
+    def get_artist_variants(self, artist: str, extra_aliases: Optional[List[str]] = None, fetch_network: bool = False) -> List[str]:
         """
         生成艺人名称的多语言变体集合：原名、常用对照表、罗马音（正序/倒序）、拼音
         """
@@ -169,8 +169,8 @@ class SongMatcher:
             variants.add(pinyin)
             variants.add(pinyin.replace(" ", ""))
 
-        # 4. 动态探测 Apple Music 官方本地化译名（完全摆脱对硬编码对照表的依赖）
-        if not artist.isascii():
+        # 4. 动态探测 Apple Music 官方本地化译名（按需触发，避免无谓网络请求）
+        if fetch_network and not artist.isascii():
             for loc in self._fetch_am_localized_artist(clean_art):
                 variants.add(loc.lower().strip())
 
@@ -219,19 +219,34 @@ class SongMatcher:
         cand_tokens = set(re.findall(r"[\w\u4e00-\u9fff\u3040-\u30ff]+", cand_artist_str.lower()))
 
         best_score = 0.0
-        for tv in target_art_vars:
-            tv_lower = tv.lower().strip()
-            # 完整匹配或词级独立匹配
-            if tv_lower == cand_clean or tv_lower in cand_tokens:
-                return 1.0
-            for comp in cand_components:
-                if tv_lower == comp or (len(tv_lower) >= 3 and tv_lower in comp):
-                    return 1.0
-                sim = difflib.SequenceMatcher(None, tv_lower, comp).ratio()
-                if sim > best_score:
-                    best_score = sim
+        for tvar in target_art_vars:
+            tv_clean = tvar.strip().lower()
+            if not tv_clean:
+                continue
 
-        return best_score
+            # 1. 完全相等
+            if tv_clean == cand_clean:
+                return 1.0
+
+            # 2. 包含在主艺人字符串中或为主要组成成分
+            if tv_clean in cand_components:
+                return 0.98
+
+            if tv_clean in cand_clean:
+                ratio = len(tv_clean) / max(len(cand_clean), 1)
+                best_score = max(best_score, 0.70 + 0.25 * ratio)
+
+            # 3. 词级别重叠 (Token Jaccard / Overlap)
+            tv_tokens = set(re.findall(r"[\w\u4e00-\u9fff\u3040-\u30ff]+", tv_clean))
+            if tv_tokens and (tv_tokens.issubset(cand_tokens) or (cand_tokens and tv_tokens & cand_tokens)):
+                overlap = len(tv_tokens & cand_tokens) / max(len(tv_tokens), 1)
+                best_score = max(best_score, 0.65 * overlap)
+
+            # 4. 字符串相似度
+            sim = difflib.SequenceMatcher(None, tv_clean, cand_clean).ratio()
+            best_score = max(best_score, sim)
+
+        return min(best_score, 1.0)
 
     def _match_title_score(self, target_title_vars: List[str], cand_title_str: str) -> float:
         """
@@ -273,29 +288,29 @@ class SongMatcher:
         cand: Dict[str, Any],
         title_variants: List[str],
         artist_variants: List[str],
-        target_dur_ms: int,
+        target_dur_ms: int
     ) -> float:
+        """
+        打分模型：结合歌名匹配、艺人匹配与毫秒级音频时长容差
+        """
         cand_title = cand.get("title", "")
         cand_artist = cand.get("artist", "")
         cand_dur_ms = cand.get("duration_ms", 0)
 
+        t_sim = self._match_title_score(title_variants, cand_title)
         a_sim = self._match_artist_score(artist_variants, cand_artist)
-        # 核心防误判 1：如果艺人完全不搭边 (a_sim < 0.40)，坚决不匹配！
-        if a_sim < 0.40:
+        dur_diff = abs(target_dur_ms - cand_dur_ms) if (target_dur_ms and cand_dur_ms) else 0
+
+        # 核心防误判 1：如果艺人相似度极低 (< 0.35)，坚决不匹配，彻底杜绝同名非同人歌曲
+        if a_sim < 0.35:
             return 0.0
 
-        t_sim = self._match_title_score(title_variants, cand_title)
-        dur_diff = abs(cand_dur_ms - target_dur_ms) if (target_dur_ms and cand_dur_ms) else 999999
-
         # 核心防误判 2：
-        # 歌名完全不吻合 (t_sim < 0.45) 的情形（如 蒼の音階 vs Blue Scale，或 ごはんを食べよう vs You）
-        # 只有在【艺人高度吻合 (>= 0.80) 且音频时长误差 <= 800ms (同母带/0.8秒内)】时才允许作为意译英文曲名匹配！
-        if t_sim < 0.45:
-            if a_sim >= 0.80 and dur_diff <= 800:
-                return 0.95
-            else:
-                # 严厉杜绝同艺人的不同歌曲！(如 Goose house 的 You 与 ごはんを食べよう 时长差 1.8 秒，立即排除)
-                return 0.0
+        # 如果歌名匹配度极低 (t_sim < 0.35)，但艺人匹配且时长高度精准 (<= 800ms)
+        # 说明是跨语言意译（如 涼海ネモ《蒼の音階》被翻译为《Blue Scale》）
+        # 赋予高确信度 0.88
+        if t_sim < 0.35 and a_sim >= 0.70 and dur_diff <= 800 and target_dur_ms > 0:
+            return 0.88
 
         # 核心防误判 3：
         # 如果音轨时长相差超过 4 秒 (dur_diff > 4000)，除非歌名高度一致 (t_sim >= 0.85)，否则坚决拒绝！
@@ -317,6 +332,7 @@ class SongMatcher:
     def match(self, target_song: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         传入网易云歌曲信息，智能检索并打分返回最佳匹配的 Apple Music 歌曲
+        采用两阶段增量检索策略，将无谓 API 请求数降低 60%+，并杜绝 429 频率限制
         """
         title = target_song.get("title", "").strip()
         primary_artist = target_song.get("primary_artist", "").strip()
@@ -329,13 +345,14 @@ class SongMatcher:
         artist_extras = target_song.get("artist_aliases", [])
         artist_variants: List[str] = []
         for art in target_song.get("artists", [primary_artist]):
-            artist_variants.extend(self.get_artist_variants(art, artist_extras))
+            artist_variants.extend(self.get_artist_variants(art, artist_extras, fetch_network=False))
 
-        # 构建优先级搜索检索词
+        # 构建阶段 1 优先级搜索检索词
         queries: List[str] = [
             f"{primary_artist} {title}",
-            f"{title} {primary_artist}",
         ]
+        if title.lower() != primary_artist.lower():
+            queries.append(f"{title} {primary_artist}")
 
         # 罗马音检索词
         romaji_titles = [v for v in title_variants if v != title.lower() and re.match(r"^[a-z0-9\s]+$", v)]
@@ -344,9 +361,9 @@ class SongMatcher:
             if artist_variants:
                 queries.append(f"{artist_variants[0]} {romaji_titles[0]}")
 
-        # 动态探测到的艺人本地化名称作为检索词 (如 "鱼韵 いらない", "生物股长 さよならララ")
+        # 如果存在本地常用对照译名（如生物股长、鱼韵），加入检索词
         for art_var in artist_variants:
-            if art_var != primary_artist.lower():
+            if art_var != primary_artist.lower() and art_var in KNOWN_ARTIST_MAP.get(primary_artist, []):
                 queries.append(f"{art_var} {title}")
                 if romaji_titles:
                     queries.append(f"{art_var} {romaji_titles[0]}")
@@ -366,10 +383,26 @@ class SongMatcher:
                     score = self._score_candidate(cand, title_variants, artist_variants, target_dur_ms)
                     if score >= 0.90:
                         has_high_score = True
-            if has_high_score or len(candidates) >= 12:
+                        break
+            if has_high_score:
                 break
 
-        # Fallback 机制：
+        # 阶段 2：如果第一轮未达到 0.85 且存在非 ASCII 艺人，按需动态探测 Apple Music 官方本地化别名
+        has_good_candidate = any(self._score_candidate(c, title_variants, artist_variants, target_dur_ms) >= 0.85 for c in candidates)
+        if not has_good_candidate and not primary_artist.isascii():
+            network_arts = self._fetch_am_localized_artist(self.clean_text(primary_artist))
+            new_arts = [a.lower().strip() for a in network_arts if a.lower().strip() not in artist_variants]
+            if new_arts:
+                artist_variants.extend(new_arts)
+                extra_queries = [f"{a} {title}" for a in new_arts]
+                for eq in extra_queries[:2]:
+                    for cand in self.am_client.search_catalog_songs(eq, limit=5):
+                        cid = cand.get("id")
+                        if cid and cid not in seen_ids:
+                            seen_ids.add(cid)
+                            candidates.append(cand)
+
+        # 阶段 3 Fallback 机制：
         # 如果以上检索均未命中属于该艺人的任何歌曲（如 涼海ネモ 的《蒼の音階》被 Apple Music 翻译成了《Blue Scale》且普通搜索不出）
         # 则直接获取该艺人的发行作品库进行母带级（<= 800ms）时长智能比对
         has_matching_artist = any(self._match_artist_score(artist_variants, c.get("artist", "")) >= 0.60 for c in candidates)

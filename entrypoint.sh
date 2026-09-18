@@ -17,7 +17,8 @@ echo "$CRON_SCHEDULE cd /app && python3 main.py sync > /proc/1/fd/1 2>&1" > /etc
 chmod 0644 /etc/cron.d/sync-cron
 crontab /etc/cron.d/sync-cron
 
-touch /var/log/sync.log
+mkdir -p /app/logs
+touch /app/logs/sync.log
 
 # 启动时先执行一次测试同步
 if [ "$RUN_ON_STARTUP" = "true" ]; then
@@ -25,5 +26,6 @@ if [ "$RUN_ON_STARTUP" = "true" ]; then
     python3 main.py sync || true
 fi
 
+cron
 echo "Cron 守护进程已就绪，等待定时触发..."
-cron -f
+exec tail -f /app/logs/sync.log

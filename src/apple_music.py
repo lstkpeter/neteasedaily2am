@@ -79,8 +79,13 @@ class AppleMusicClient:
                     })
                 return results
             elif resp.status_code == 429:
-                # 触发限流，线性退避重试
-                time.sleep(1.5 * (attempt + 1))
+                wait_time = 2.0 * (attempt + 1)
+                try:
+                    from .logger import setup_logger
+                    setup_logger().warning(f"Apple Music 检索 '{term}' 触发 429 频率限制，等待 {wait_time:.1f}s 后重试 (第 {attempt+1}/3 次)...")
+                except Exception:
+                    pass
+                time.sleep(wait_time)
                 continue
             elif resp.status_code == 401:
                 raise PermissionError("Apple Music 鉴权失败 (401)，Developer Token 可能已失效。")

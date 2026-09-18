@@ -323,9 +323,13 @@ class SongMatcher:
             return max(0.90, 0.5 * t_sim + 0.5 * a_sim)
 
         # 情形 B：歌名中度吻合 (0.45 <= t_sim < 0.80)
-        # 要求艺人匹配，且时长误差必须在合理范围内 (<= 2500ms)
-        if a_sim >= 0.60 and dur_diff <= 2500:
+        # 要求歌名与艺人均有合理吻合，且时长误差在合理范围内 (<= 2500ms)
+        if t_sim >= 0.45 and a_sim >= 0.60 and dur_diff <= 2500:
             return 0.85
+
+        # 歌名不吻合 (t_sim < 0.45) 且未被同母带时长 (<= 800ms) 命中的，坚决排除
+        if t_sim < 0.45:
+            return 0.0
 
         return 0.55 * t_sim + 0.45 * a_sim
 

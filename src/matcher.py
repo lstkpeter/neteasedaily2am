@@ -288,28 +288,49 @@ class SongMatcher:
         cand: Dict[str, Any],
         title_variants: List[str],
         artist_variants: List[str],
-        target_dur_ms: int
+        target_dur_ms: int,
+        target_album: str = "",
     ) -> float:
         """
-        打分模型：结合歌名匹配、艺人匹配与毫秒级音频时长容差
+        打分模型：结合歌名匹配、艺人匹配、专辑匹配与毫秒级音频时长容差
         """
         cand_title = cand.get("title", "")
         cand_artist = cand.get("artist", "")
+        cand_album = cand.get("album", "")
         cand_dur_ms = cand.get("duration_ms", 0)
 
         t_sim = self._match_title_score(title_variants, cand_title)
         a_sim = self._match_artist_score(artist_variants, cand_artist)
         dur_diff = abs(target_dur_ms - cand_dur_ms) if (target_dur_ms and cand_dur_ms) else 0
 
-        # 核心防误判 1：如果艺人相似度极低 (< 0.35)，坚决不匹配，彻底杜绝同名非同人歌曲
+        # 检查专辑一致性（针对制作人/企划合辑，如 蝶々P meets Singers / nero《831143》）
+        clean_target_album = self.clean_text(target_album).lower()
+        clean_cand_album = self.clean_text(cand_album).lower()
+        album_matches = False
+        if clean_target_album and clean_cand_album:
+            if clean_target_album in clean_cand_album or clean_cand_album in clean_target_album:
+                album_matches = True
+            elif difflib.SequenceMatcher(None, clean_target_album, clean_cand_album).ratio() >= 0.70:
+                album_matches = True
+
+        # 情形 1：合辑/企划专辑中的歌名高度吻合，且专辑匹配、时长吻合 (<= 3000ms)
+        # 即使艺人名不一致（网易云填歌手，Apple Music 填制作人/企划艺人），也判定为高度匹配
+        if t_sim >= 0.85 and album_matches and dur_diff <= 3000:
+            return 0.92
+
+        # 核心防误判 1：如果艺人相似度极低 (< 0.35)，且不满足合辑专辑匹配，坚决不匹配
         if a_sim < 0.35:
             return 0.0
 
-        # 核心防误判 2：
+        # 核心防误判 2（跨语言意译）：
         # 如果歌名匹配度极低 (t_sim < 0.35)，但艺人匹配且时长高度精准 (<= 800ms)
-        # 说明是跨语言意译（如 涼海ネモ《蒼の音階》被翻译为《Blue Scale》）
-        # 赋予高确信度 0.88
-        if t_sim < 0.35 and a_sim >= 0.70 and dur_diff <= 800 and target_dur_ms > 0:
+        # 注意：意译只发生在跨语言场景（如日文/中文歌名被翻译为英文 Blue Scale / Madder）
+        # 如果双方均为 CJK 字符（日文汉字/假名或中文），绝对不可能互为意译！杜绝如 佐藤聡美 的《君にまつわるミステリー》串成《恋は劇薬、口に甘し。》
+        def has_cjk(s: str) -> bool:
+            return bool(re.search(r"[\u4e00-\u9fff\u3040-\u30ff]", s))
+
+        is_cross_language = bool(title_variants) and (has_cjk(title_variants[0]) != has_cjk(cand_title))
+        if t_sim < 0.35 and is_cross_language and a_sim >= 0.70 and dur_diff <= 800 and target_dur_ms > 0:
             return 0.88
 
         # 核心防误判 3：
@@ -341,6 +362,7 @@ class SongMatcher:
         title = target_song.get("title", "").strip()
         primary_artist = target_song.get("primary_artist", "").strip()
         target_dur_ms = target_song.get("duration_ms", 0)
+        target_album = target_song.get("album", "").strip()
 
         # 提取网易云附带的别名与翻译
         extras = target_song.get("aliases", []) + target_song.get("translations", [])
@@ -384,27 +406,47 @@ class SongMatcher:
                     seen_ids.add(cid)
                     candidates.append(cand)
                     # 提前打分探测：如果已经搜到了高确信度结果 (>= 0.90)，立即停止后续多余搜索节省请求
-                    score = self._score_candidate(cand, title_variants, artist_variants, target_dur_ms)
+                    score = self._score_candidate(cand, title_variants, artist_variants, target_dur_ms, target_album)
                     if score >= 0.90:
                         has_high_score = True
                         break
             if has_high_score:
                 break
 
-        # 阶段 2：如果第一轮未达到 0.85 且存在非 ASCII 艺人，按需动态探测 Apple Music 官方本地化别名
-        has_good_candidate = any(self._score_candidate(c, title_variants, artist_variants, target_dur_ms) >= 0.85 for c in candidates)
-        if not has_good_candidate and not primary_artist.isascii():
-            network_arts = self._fetch_am_localized_artist(self.clean_text(primary_artist))
-            new_arts = [a.lower().strip() for a in network_arts if a.lower().strip() not in artist_variants]
-            if new_arts:
-                artist_variants.extend(new_arts)
-                extra_queries = [f"{a} {title}" for a in new_arts]
-                for eq in extra_queries[:2]:
-                    for cand in self.am_client.search_catalog_songs(eq, limit=5):
-                        cid = cand.get("id")
-                        if cid and cid not in seen_ids:
-                            seen_ids.add(cid)
-                            candidates.append(cand)
+        # 阶段 2：如果第一轮未达到 0.85
+        has_good_candidate = any(self._score_candidate(c, title_variants, artist_variants, target_dur_ms, target_album) >= 0.85 for c in candidates)
+        if not has_good_candidate:
+            # 2.1 针对非 ASCII 艺人，按需动态探测 Apple Music 官方本地化别名
+            if not primary_artist.isascii():
+                network_arts = self._fetch_am_localized_artist(self.clean_text(primary_artist))
+                new_arts = [a.lower().strip() for a in network_arts if a.lower().strip() not in artist_variants]
+                if new_arts:
+                    artist_variants.extend(new_arts)
+                    extra_queries = [f"{a} {title}" for a in new_arts]
+                    for eq in extra_queries[:2]:
+                        for cand in self.am_client.search_catalog_songs(eq, limit=5):
+                            cid = cand.get("id")
+                            if cid and cid not in seen_ids:
+                                seen_ids.add(cid)
+                                candidates.append(cand)
+
+            # 2.2 针对制作人企划/合辑或艺人署名不一致的情况，尝试通过 "歌名 专辑名" 或单纯 "歌名" 检索
+            title_album_queries = []
+            if target_album and target_album.lower() != title.lower():
+                clean_alb = self.clean_text(target_album)
+                if clean_alb:
+                    title_album_queries.append(f"{title} {clean_alb}")
+            title_album_queries.append(title)
+
+            for taq in title_album_queries:
+                has_match = any(self._score_candidate(c, title_variants, artist_variants, target_dur_ms, target_album) >= 0.85 for c in candidates)
+                if has_match:
+                    break
+                for cand in self.am_client.search_catalog_songs(taq, limit=5):
+                    cid = cand.get("id")
+                    if cid and cid not in seen_ids:
+                        seen_ids.add(cid)
+                        candidates.append(cand)
 
         # 阶段 3 Fallback 机制：
         # 如果以上检索均未命中属于该艺人的任何歌曲（如 涼海ネモ 的《蒼の音階》被 Apple Music 翻译成了《Blue Scale》且普通搜索不出）
@@ -424,7 +466,7 @@ class SongMatcher:
         # 打分排序
         scored = []
         for cand in candidates:
-            score = self._score_candidate(cand, title_variants, artist_variants, target_dur_ms)
+            score = self._score_candidate(cand, title_variants, artist_variants, target_dur_ms, target_album)
             if score > 0:
                 scored.append((score, cand))
 

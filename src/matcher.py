@@ -290,6 +290,7 @@ class SongMatcher:
         artist_variants: List[str],
         target_dur_ms: int,
         target_album: str = "",
+        target_title: str = "",
     ) -> float:
         """
         打分模型：结合歌名匹配、艺人匹配、专辑匹配与毫秒级音频时长容差
@@ -326,10 +327,13 @@ class SongMatcher:
         # 如果歌名匹配度极低 (t_sim < 0.35)，但艺人匹配且时长高度精准 (<= 800ms)
         # 注意：意译只发生在跨语言场景（如日文/中文歌名被翻译为英文 Blue Scale / Madder）
         # 如果双方均为 CJK 字符（日文汉字/假名或中文），绝对不可能互为意译！杜绝如 佐藤聡美 的《君にまつわるミステリー》串成《恋は劇薬、口に甘し。》
+        # 必须直接检查原始 target_title，不能使用 title_variants[0]，因为 title_variants 包含罗马音且顺序由集合决定
         def has_cjk(s: str) -> bool:
             return bool(re.search(r"[\u4e00-\u9fff\u3040-\u30ff]", s))
 
-        is_cross_language = bool(title_variants) and (has_cjk(title_variants[0]) != has_cjk(cand_title))
+        ref_title = target_title or (title_variants[0] if title_variants else "")
+        both_cjk = has_cjk(ref_title) and has_cjk(cand_title)
+        is_cross_language = (not both_cjk) and (has_cjk(ref_title) != has_cjk(cand_title))
         if t_sim < 0.35 and is_cross_language and a_sim >= 0.70 and dur_diff <= 800 and target_dur_ms > 0:
             return 0.88
 
@@ -406,7 +410,7 @@ class SongMatcher:
                     seen_ids.add(cid)
                     candidates.append(cand)
                     # 提前打分探测：如果已经搜到了高确信度结果 (>= 0.90)，立即停止后续多余搜索节省请求
-                    score = self._score_candidate(cand, title_variants, artist_variants, target_dur_ms, target_album)
+                    score = self._score_candidate(cand, title_variants, artist_variants, target_dur_ms, target_album, target_title=title)
                     if score >= 0.90:
                         has_high_score = True
                         break
@@ -414,7 +418,7 @@ class SongMatcher:
                 break
 
         # 阶段 2：如果第一轮未达到 0.85
-        has_good_candidate = any(self._score_candidate(c, title_variants, artist_variants, target_dur_ms, target_album) >= 0.85 for c in candidates)
+        has_good_candidate = any(self._score_candidate(c, title_variants, artist_variants, target_dur_ms, target_album, target_title=title) >= 0.85 for c in candidates)
         if not has_good_candidate:
             # 2.1 针对非 ASCII 艺人，按需动态探测 Apple Music 官方本地化别名
             if not primary_artist.isascii():
@@ -439,7 +443,7 @@ class SongMatcher:
             title_album_queries.append(title)
 
             for taq in title_album_queries:
-                has_match = any(self._score_candidate(c, title_variants, artist_variants, target_dur_ms, target_album) >= 0.85 for c in candidates)
+                has_match = any(self._score_candidate(c, title_variants, artist_variants, target_dur_ms, target_album, target_title=title) >= 0.85 for c in candidates)
                 if has_match:
                     break
                 for cand in self.am_client.search_catalog_songs(taq, limit=5):
@@ -466,7 +470,7 @@ class SongMatcher:
         # 打分排序
         scored = []
         for cand in candidates:
-            score = self._score_candidate(cand, title_variants, artist_variants, target_dur_ms, target_album)
+            score = self._score_candidate(cand, title_variants, artist_variants, target_dur_ms, target_album, target_title=title)
             if score > 0:
                 scored.append((score, cand))
 

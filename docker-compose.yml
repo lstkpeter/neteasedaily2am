@@ -18,5 +18,6 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./src:/app/src:ro
+      - ./entrypoint.sh:/app/entrypoint.sh
       # 如果习惯使用 config.json 文件配置，可取消下行注释进行挂载：
       # - ./config.json:/app/config.json:ro

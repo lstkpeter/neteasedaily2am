@@ -216,6 +216,15 @@ class SongMatcher:
         cand_clean = self.clean_text(cand_artist_str).lower()
         cand_parts = re.split(r"[,&/、+;]|\bfeat\b\.?|\bfeaturing\b|\bwith\b|\bfrom\b", cand_artist_str, flags=re.IGNORECASE)
         cand_components = [self.clean_text(p).lower() for p in cand_parts if p.strip()]
+
+        # 提取 CV / 声优 (如 "星見純那(CV:佐藤日向)" -> "佐藤日向")
+        cv_matches = re.findall(r"[\(（\[【]\s*(?:cv[\.:：\s]?)\s*([^()（）\[\]【】]+)[\)）\]】]", cand_artist_str, flags=re.IGNORECASE)
+        for cv in cv_matches:
+            for cv_part in re.split(r"[,&/、+;]|\bfeat\b\.?|\bwith\b", cv, flags=re.IGNORECASE):
+                p_clean = self.clean_text(cv_part).lower().strip()
+                if p_clean and p_clean not in cand_components:
+                    cand_components.append(p_clean)
+
         cand_tokens = set(re.findall(r"[\w\u4e00-\u9fff\u3040-\u30ff]+", cand_artist_str.lower()))
 
         best_score = 0.0
@@ -232,7 +241,7 @@ class SongMatcher:
             if tv_clean in cand_components:
                 return 0.98
 
-            if tv_clean in cand_clean:
+            if tv_clean in cand_clean or tv_clean in cand_artist_str.lower():
                 ratio = len(tv_clean) / max(len(cand_clean), 1)
                 best_score = max(best_score, 0.70 + 0.25 * ratio)
 
@@ -314,18 +323,8 @@ class SongMatcher:
             elif difflib.SequenceMatcher(None, clean_target_album, clean_cand_album).ratio() >= 0.70:
                 album_matches = True
 
-        # 情形 1：合辑/企划专辑中的歌名高度吻合，且专辑匹配、时长吻合 (<= 3000ms)
-        # 即使艺人名不一致（网易云填歌手，Apple Music 填制作人/企划艺人），也判定为高度匹配
-        if t_sim >= 0.85 and album_matches and dur_diff <= 3000:
-            return 0.92
-
-        # 核心防误判 1：如果艺人相似度极低 (< 0.35)，且不满足合辑专辑匹配，坚决不匹配
-        if a_sim < 0.35:
-            return 0.0
-
-        # 核心防误判 2（跨语言意译）：
-        # 如果歌名匹配度极低 (t_sim < 0.35)，但艺人匹配且时长高度精准 (<= 800ms)
-        # 注意：意译只发生在跨语言场景（如日文/中文歌名被翻译为英文 Blue Scale / Madder）
+        # 跨语言意译场景检测：
+        # 注意：意译只发生在跨语言场景（如日文/中文歌名被翻译为英文 Blue Scale / Madder / Stay Only On My Fingers）
         # 如果双方均为 CJK 字符（日文汉字/假名或中文），绝对不可能互为意译！杜绝如 佐藤聡美 的《君にまつわるミステリー》串成《恋は劇薬、口に甘し。》
         # 必须直接检查原始 target_title，不能使用 title_variants[0]，因为 title_variants 包含罗马音且顺序由集合决定
         def has_cjk(s: str) -> bool:
@@ -334,7 +333,24 @@ class SongMatcher:
         ref_title = target_title or (title_variants[0] if title_variants else "")
         both_cjk = has_cjk(ref_title) and has_cjk(cand_title)
         is_cross_language = (not both_cjk) and (has_cjk(ref_title) != has_cjk(cand_title))
-        if t_sim < 0.35 and is_cross_language and a_sim >= 0.70 and dur_diff <= 800 and target_dur_ms > 0:
+
+        # 情形 1：合辑/企划专辑中的歌名高度吻合，且专辑匹配、时长吻合 (<= 3000ms)
+        # 即使艺人名不一致（网易云填歌手，Apple Music 填制作人/企划艺人），也判定为高度匹配
+        if t_sim >= 0.85 and album_matches and dur_diff <= 3000:
+            return 0.92
+
+        # 情形 1.1：企划/原声带同专辑跨语言/意译匹配：专辑名匹配且时长精准 (<= 1500ms)，艺人有重合或跨语言
+        if album_matches and dur_diff <= 1500 and (is_cross_language or a_sim >= 0.60):
+            return 0.92
+
+        # 核心防误判 1：如果艺人相似度极低 (< 0.35)，且不满足合辑专辑匹配，坚决不匹配
+        if a_sim < 0.35:
+            return 0.0
+
+        # 核心防误判 2（跨语言意译）：
+        # 如果满足跨语言（一中/日、一非CJK），艺人匹配且时长高度精准 (<= 800ms)
+        # 无论 t_sim 为多少（如罗马音/意译有部分字符相似），只要母带时长吻合且艺人匹配即认可
+        if is_cross_language and a_sim >= 0.60 and dur_diff <= 800 and target_dur_ms > 0:
             return 0.88
 
         # 核心防误判 3：

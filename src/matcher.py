@@ -251,9 +251,10 @@ class SongMatcher:
                 overlap = len(tv_tokens & cand_tokens) / max(len(tv_tokens), 1)
                 best_score = max(best_score, 0.65 * overlap)
 
-            # 4. 字符串相似度
+            # 4. 字符串相似度（仅用于拼写容错，要求相似度高且有词形相似性，杜绝无词根关联的字母散落巧合）
             sim = difflib.SequenceMatcher(None, tv_clean, cand_clean).ratio()
-            best_score = max(best_score, sim)
+            if sim >= 0.75:
+                best_score = max(best_score, sim)
 
         return min(best_score, 1.0)
 
@@ -324,7 +325,7 @@ class SongMatcher:
                 album_matches = True
 
         # 跨语言意译场景检测：
-        # 注意：意译只发生在跨语言场景（如日文/中文歌名被翻译为英文 Blue Scale / Madder / Stay Only On My Fingers）
+        # 注意：意译只发生在跨语言场景（如日文/中文歌名被翻译为英文 Blue Scale / Madder / Stay Only On My Fingers / The Old Man and the Sea）
         # 如果双方均为 CJK 字符（日文汉字/假名或中文），绝对不可能互为意译！杜绝如 佐藤聡美 的《君にまつわるミステリー》串成《恋は劇薬、口に甘し。》
         # 必须直接检查原始 target_title，不能使用 title_variants[0]，因为 title_variants 包含罗马音且顺序由集合决定
         def has_cjk(s: str) -> bool:
@@ -348,20 +349,28 @@ class SongMatcher:
             return 0.0
 
         # 核心防误判 2（跨语言意译）：
-        # 如果满足跨语言（一中/日、一非CJK），艺人匹配且时长高度精准 (<= 800ms)
+        # 如果满足跨语言（一中/日、一非CJK），且时长高度精准 (<= 800ms)
         # 无论 t_sim 为多少（如罗马音/意译有部分字符相似），只要母带时长吻合且艺人匹配即认可
-        if is_cross_language and a_sim >= 0.60 and dur_diff <= 800 and target_dur_ms > 0:
-            return 0.88
+        if is_cross_language and dur_diff <= 800 and target_dur_ms > 0:
+            if a_sim >= 0.80:
+                return 0.93  # 艺人高度一致 + 音频母带级吻合，极高确信度意译匹配
+            elif a_sim >= 0.60:
+                return 0.88  # 艺人合作/部分匹配 + 母带级吻合
 
-        # 核心防误判 3：
-        # 如果音轨时长相差超过 4 秒 (dur_diff > 4000)，除非歌名高度一致 (t_sim >= 0.85)，否则坚决拒绝！
-        # 杜绝同一艺人由于字母重叠（如 iranai 与 Wasurerarenaino 相差 13.6 秒）发生串歌误判
-        if dur_diff > 4000 and t_sim < 0.85:
+        # 核心防误判 3（时长偏离防御）：
+        # 3.1 时长相差超过 15 秒，绝不允许匹配（坚决杜绝不同版本 Live、加长版、或同名异曲串歌）
+        if dur_diff > 15000:
+            return 0.0
+        # 3.2 时长相差超过 4 秒时，必须满足歌名高度一致且艺人可信 (a_sim >= 0.75)
+        if dur_diff > 4000 and (a_sim < 0.75 or t_sim < 0.85):
             return 0.0
 
         # 情形 A：歌名高度吻合 (>= 0.80)（原名或罗马音）
         if t_sim >= 0.80:
-            return max(0.90, 0.5 * t_sim + 0.5 * a_sim)
+            # 只有在艺人高度吻合 (>= 0.75) 且时长合理吻合 (<= 4000ms) 时，才赋予 >= 0.90 的高确信分
+            if a_sim >= 0.75 and dur_diff <= 4000:
+                return max(0.90, 0.5 * t_sim + 0.5 * a_sim)
+            return 0.50 * t_sim + 0.50 * a_sim
 
         # 情形 B：歌名中度吻合 (0.45 <= t_sim < 0.80)
         # 要求歌名与艺人均有合理吻合，且时长误差在合理范围内 (<= 2500ms)

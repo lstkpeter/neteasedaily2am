@@ -146,22 +146,32 @@ class AppleMusicClient:
 
     def get_playlist_track_ids(self, playlist_id: str) -> Set[str]:
         """
-        获取歌单中已存在的歌曲 Catalog ID（用于查重）
+        获取歌单中已存在的歌曲 Catalog ID（支持自动翻页无上限完整查重）
         """
         url = f"{self.BASE_URL}/me/library/playlists/{playlist_id}/tracks?limit=100"
-        resp = self.user_session.get(url)
-        if resp.status_code != 200:
-            return set()
-
-        data = resp.json()
         catalog_ids = set()
-        for item in data.get("data", []):
-            # 优先从 relationships 中提取 catalog id
-            catalog_info = item.get("relationships", {}).get("catalog", {}).get("data", [])
-            if catalog_info and catalog_info[0].get("id"):
-                catalog_ids.add(str(catalog_info[0].get("id")))
-            elif item.get("id"):
-                catalog_ids.add(str(item.get("id")))
+
+        while url:
+            self._rate_limit()
+            resp = self.user_session.get(url)
+            if resp.status_code != 200:
+                break
+
+            data = resp.json()
+            for item in data.get("data", []):
+                # 优先从 relationships 中提取 catalog id
+                catalog_info = item.get("relationships", {}).get("catalog", {}).get("data", [])
+                if catalog_info and catalog_info[0].get("id"):
+                    catalog_ids.add(str(catalog_info[0].get("id")))
+                elif item.get("id"):
+                    catalog_ids.add(str(item.get("id")))
+
+            next_path = data.get("next")
+            if next_path:
+                url = f"{self.BASE_URL}{next_path}" if next_path.startswith("/") else next_path
+            else:
+                break
+
         return catalog_ids
 
     def create_playlist(

@@ -131,14 +131,14 @@ class SyncManager:
                     console.print(f"[bold green]🎉 固定歌单创建成功并导入歌曲！(ID: {pid})[/bold green]")
                 else:
                     pid = existing["id"]
-                    console.print(f"[dim]歌单已存在 (ID: {pid})，正在检查已有歌曲并查重追加...[/dim]")
+                    console.print(f"[dim]歌单已存在 (ID: {pid})，正在检索已有曲目并智能查重...[/dim]")
                     existing_song_ids = self.am.get_playlist_track_ids(pid)
                     to_add = [sid for sid in am_catalog_song_ids if sid not in existing_song_ids]
 
                     if to_add:
                         self.am.add_tracks_to_playlist(pid, to_add)
-                        self.logger.info(f"成功追加 {len(to_add)} 首新歌曲到「{playlist_name}」(ID: {pid}, 跳过已存在: {len(am_catalog_song_ids) - len(to_add)} 首)")
-                        console.print(f"[bold green]🎉 成功追加 {len(to_add)} 首新歌曲到「{playlist_name}」！(跳过 {len(am_catalog_song_ids) - len(to_add)} 首已存在)[/bold green]")
+                        self.logger.info(f"成功追加 {len(to_add)} 首新歌曲到「{playlist_name}」(ID: {pid}, 当前总曲目约: {len(existing_song_ids) + len(to_add)} 首, 跳过重复: {len(am_catalog_song_ids) - len(to_add)} 首)")
+                        console.print(f"[bold green]🎉 成功追加 {len(to_add)} 首新歌曲到「{playlist_name}」！(跳过 {len(am_catalog_song_ids) - len(to_add)} 首已存在，累计收录: {len(existing_song_ids) + len(to_add)} 首)[/bold green]")
                     else:
                         self.logger.info(f"歌单「{playlist_name}」已包含今天所有推荐歌曲，无需重复添加。")
                         console.print(f"[bold green]✓ 歌单「{playlist_name}」已包含今天的所有推荐歌曲，无需重复添加。[/bold green]")

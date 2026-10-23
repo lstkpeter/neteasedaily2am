@@ -66,7 +66,9 @@ def load_config(config_path: str = "config.json") -> AppConfig:
     # 歌单配置
     p_data = data.get("playlist", {})
     mode = (p_data.get("mode") or os.getenv("SYNC_MODE", "archive")).strip().lower()
-    if mode not in ("archive", "overwrite"):
+    if mode in ("overwrite", "append", "single"):
+        mode = "overwrite"
+    else:
         mode = "archive"
 
     overwrite_name = (p_data.get("overwrite_name") or os.getenv("PLAYLIST_OVERWRITE_NAME", "网易云每日推荐")).strip()

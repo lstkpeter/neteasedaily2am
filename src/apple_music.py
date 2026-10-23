@@ -159,11 +159,18 @@ class AppleMusicClient:
 
             data = resp.json()
             for item in data.get("data", []):
-                # 优先从 relationships 中提取 catalog id
+                # 1. 优先从 playParams 中提取公共曲库 catalogId（最标准可靠）
+                cat_id = item.get("attributes", {}).get("playParams", {}).get("catalogId")
+                if cat_id:
+                    catalog_ids.add(str(cat_id))
+
+                # 2. 备选：从 relationships 中提取 catalog id
                 catalog_info = item.get("relationships", {}).get("catalog", {}).get("data", [])
                 if catalog_info and catalog_info[0].get("id"):
                     catalog_ids.add(str(catalog_info[0].get("id")))
-                elif item.get("id"):
+
+                # 3. 记录自身 library id 作为兜底
+                if item.get("id"):
                     catalog_ids.add(str(item.get("id")))
 
             next_path = data.get("next")

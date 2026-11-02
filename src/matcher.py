@@ -337,7 +337,7 @@ class SongMatcher:
         # 策略 A：日推主要为带人声正曲，若 Apple Music 候选曲是伴奏/Off Vocal/カラオケ，而目标不是伴奏，直接归零排除 (0.0 分)
         # 杜绝伴奏冒充正曲获得高分，并避免触发提前截断机制 (>= 0.90)；反之若目标明确指定伴奏而候选为正曲，亦不允许误串
         ref_title = target_title or (title_variants[0] if title_variants else "")
-        target_is_inst = self.is_instrumental(ref_title)
+        target_is_inst = self.is_instrumental(ref_title) or any(self.is_instrumental(v) for v in title_variants)
         cand_is_inst = self.is_instrumental(cand_title)
         if cand_is_inst != target_is_inst:
             return 0.0

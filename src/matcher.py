@@ -92,6 +92,40 @@ class SongMatcher:
             return False
         return bool(cls.INSTRUMENTAL_PATTERN.search(text))
 
+    # 山寨翻唱 / 伴奏 / 致敬 / 原曲歌手 关键字正则（如 "ロマンティックあげるよ(原曲歌手:橋本潮)"、"Lemon (Cover by XXX)"）
+    COVER_KARAOKE_PATTERN = re.compile(
+        r'(?:'
+        r'[\(（\[【][^)）\]】]*(?:原曲歌手|原曲[:：]|originally\s+performed\s+by|original\s+performed\s+by|original\s+artist[:：]|cover(?:ed)?\s+by|tribute\s+to|in\s+the\s+style\s+of|オルゴール|orgel|ガイド無し|ガイドメロディ|カラオケ歌っちゃ王)[^)）\]】]*[\)）\]】]'
+        r'|(?:\boriginally\s+performed\s+by\b|\boriginal\s+artist\b|\btribute\s+to\b|\bin\s+the\s+style\s+of\b)'
+        r'|[-+]\d+\s*keys?'
+        r')',
+        re.IGNORECASE,
+    )
+
+    # 常见山寨翻唱 / 卡拉OK流水线批量上架厂牌 / 账号黑名单
+    COVER_ARTIST_PATTERN = re.compile(
+        r'(?:歌っちゃ王|生音風カラオケ屋|orgel\s*sound|オルゴール|karaoke\s*all\s*stars|karaoke\s*band)',
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def is_cover_or_tribute(cls, text: str) -> bool:
+        """
+        判断标题是否包含 (原曲歌手:XXX)、Originally Performed By 等山寨翻唱/卡拉OK标记
+        """
+        if not text:
+            return False
+        return bool(cls.COVER_KARAOKE_PATTERN.search(text))
+
+    @classmethod
+    def is_cover_artist(cls, artist: str) -> bool:
+        """
+        判断艺人是否为已知伴奏/山寨翻唱厂牌账号（如 歌っちゃ王、生音風カラオケ屋 等）
+        """
+        if not artist:
+            return False
+        return bool(cls.COVER_ARTIST_PATTERN.search(artist))
+
     def get_romaji(self, text: str) -> str:
         """
         日文假名/汉字转罗马音 (Hepburn)
@@ -208,16 +242,21 @@ class SongMatcher:
 
         found = []
         try:
-            res = self.am_client.search_catalog_songs(clean_art, limit=3)
-            for r in res:
-                cand_art = r.get("artist", "").strip()
-                if cand_art and cand_art not in found:
+            # 优先使用 artists 专属检索接口，坚决杜绝因搜索 songs 误将翻唱/伴奏厂牌（如 歌っちゃ王、Orgel 等）当成本地化艺人译名
+            if hasattr(self.am_client, "search_catalog_artists"):
+                raw_artists = self.am_client.search_catalog_artists(clean_art, limit=3)
+            else:
+                raw_artists = [r.get("artist", "").strip() for r in self.am_client.search_catalog_songs(clean_art, limit=3)]
+
+            for cand_art in raw_artists:
+                cand_art = cand_art.strip()
+                if cand_art and not self.is_cover_artist(cand_art) and cand_art not in found:
                     found.append(cand_art)
                     # 拆解复合艺人名
                     parts = re.split(r"[,&/、+;]|\bfeat\b\.?|\bfeaturing\b|\bwith\b|\bfrom\b", cand_art, flags=re.IGNORECASE)
                     for p in parts:
                         p_clean = self.clean_text(p).strip()
-                        if p_clean and p_clean not in found:
+                        if p_clean and not self.is_cover_artist(p_clean) and p_clean not in found:
                             found.append(p_clean)
         except Exception:
             pass
@@ -340,6 +379,13 @@ class SongMatcher:
         target_is_inst = self.is_instrumental(ref_title) or any(self.is_instrumental(v) for v in title_variants)
         cand_is_inst = self.is_instrumental(cand_title)
         if cand_is_inst != target_is_inst:
+            return 0.0
+
+        # 核心防误判 0.5：山寨翻唱 / 伴奏厂牌（如 歌っちゃ王、生音風カラオケ屋、Orgel 等）防御
+        # 常见在标题标注 "(原曲歌手:XXX)"、"(原曲:XXX)"、"Originally Performed By" 或艺人属于伴奏翻唱账号
+        cand_is_cover = self.is_cover_or_tribute(cand_title) or self.is_cover_artist(cand_artist)
+        target_is_cover = self.is_cover_or_tribute(target_title) or any(self.is_cover_or_tribute(v) for v in title_variants)
+        if cand_is_cover and not target_is_cover:
             return 0.0
 
         # 检查专辑一致性（针对制作人/企划合辑，如 蝶々P meets Singers / nero《831143》）

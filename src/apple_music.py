@@ -112,6 +112,44 @@ class AppleMusicClient:
 
         return []
 
+    def search_catalog_artists(self, term: str, limit: int = 3) -> List[str]:
+        """
+        在 Apple Music 公共曲库中专程检索艺人对象，获取官方本地化艺人名
+        """
+        encoded_term = urllib.parse.quote(term)
+        url = f"{self.BASE_URL}/catalog/{self.storefront}/search?term={encoded_term}&types=artists&limit={limit}"
+
+        for attempt in range(3):
+            self._rate_limit()
+            try:
+                resp = self.user_session.get(url, timeout=10)
+                if resp.status_code == 429:
+                    resp = self.catalog_session.get(url, timeout=10)
+            except Exception:
+                time.sleep(1.0)
+                continue
+
+            if resp.status_code == 200:
+                data = resp.json()
+                artists_data = data.get("results", {}).get("artists", {}).get("data", [])
+                results = []
+                for item in artists_data:
+                    name = item.get("attributes", {}).get("name", "").strip()
+                    if name and name not in results:
+                        results.append(name)
+                return results
+            elif resp.status_code == 429:
+                retry_header = resp.headers.get("Retry-After")
+                wait_time = float(retry_header) + 1.0 if (retry_header and retry_header.isdigit()) else 2.5 * (attempt + 1)
+                time.sleep(wait_time)
+                continue
+            elif resp.status_code == 401:
+                raise PermissionError("Apple Music 鉴权失败 (401)，Developer Token 可能已失效。")
+            else:
+                return []
+
+        return []
+
     def get_library_playlists(self, limit: int = 100) -> List[Dict[str, Any]]:
         """
         获取用户个人资料库中的歌单列表

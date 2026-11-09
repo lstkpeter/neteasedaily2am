@@ -92,10 +92,11 @@ class SongMatcher:
             return False
         return bool(cls.INSTRUMENTAL_PATTERN.search(text))
 
-    # 山寨翻唱 / 伴奏 / 致敬 / 原曲歌手 关键字正则（如 "ロマンティックあげるよ(原曲歌手:橋本潮)"、"Lemon (Cover by XXX)"）
+    # 假冒原唱 / 山寨伴奏 / 致敬 / 原曲歌手 关键字正则（如 "(原曲歌手:XXX)"、"Originally Performed By" 等山寨SEO假原唱标识）
+    # 注意：正常歌手的翻唱（如 Cover by suis、Covered by Ado）属于合法翻唱曲目，绝不可误伤
     COVER_KARAOKE_PATTERN = re.compile(
         r'(?:'
-        r'[\(（\[【][^)）\]】]*(?:原曲歌手|原曲[:：]|originally\s+performed\s+by|original\s+performed\s+by|original\s+artist[:：]|cover(?:ed)?\s+by|tribute\s+to|in\s+the\s+style\s+of|オルゴール|orgel|ガイド無し|ガイドメロディ|カラオケ歌っちゃ王)[^)）\]】]*[\)）\]】]'
+        r'[\(（\[【][^)）\]】]*(?:原曲歌手|原曲[:：]|originally\s+performed\s+by|original\s+performed\s+by|original\s+artist[:：]|tribute\s+to|in\s+the\s+style\s+of|オルゴール|orgel|ガイド無し|ガイドメロディ|カラオケ歌っちゃ王)[^)）\]】]*[\)）\]】]'
         r'|(?:\boriginally\s+performed\s+by\b|\boriginal\s+artist\b|\btribute\s+to\b|\bin\s+the\s+style\s+of\b)'
         r'|[-+]\d+\s*keys?'
         r')',
